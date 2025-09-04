@@ -257,6 +257,10 @@ func (r *Receipt) Size() common.StorageSize {
 	return size
 }
 
+func (r *Receipt) SetEffectiveGasPrice(tx *Transaction, baseFee *big.Int) {
+	r.EffectiveGasPrice = tx.inner.effectiveGasPrice(new(big.Int), baseFee)
+}
+
 // ReceiptForStorage is a wrapper around a Receipt with RLP serialization
 // that omits the Bloom field and deserialization that re-computes it.
 type ReceiptForStorage Receipt

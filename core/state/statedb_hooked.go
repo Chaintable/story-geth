@@ -42,6 +42,9 @@ func NewHookedState(stateDb *StateDB, hooks *tracing.Hooks) *hookedStateDB {
 	if s.hooks == nil {
 		s.hooks = new(tracing.Hooks)
 	}
+	if s.hooks != nil && s.hooks.OnCommit != nil {
+		stateDb.SetOnCommitLogger(s.hooks.OnCommit)
+	}
 	return s
 }
 

@@ -155,6 +155,8 @@ type StateDB struct {
 	StorageLoaded  int          // Number of storage slots retrieved from the database during the state transition
 	StorageUpdated atomic.Int64 // Number of storage slots updated during the state transition
 	StorageDeleted atomic.Int64 // Number of storage slots deleted during the state transition
+
+	OnCommit tracing.CommitHook
 }
 
 // New creates a new state from a given trie.
@@ -1291,6 +1293,31 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorag
 			}
 			s.SnapshotCommits += time.Since(start)
 		}
+		if s.OnCommit != nil {
+			contracts := make(map[common.Hash][]byte)
+			for _, code := range ret.codes {
+				contracts[code.hash] = code.blob
+			}
+			accounts := make(map[common.Hash][]byte)
+			destructs := make(map[common.Hash]struct{})
+			for k, v := range ret.accounts {
+				if v == nil {
+					destructs[k] = struct{}{}
+				} else {
+					accounts[k] = v
+				}
+			}
+			s.OnCommit(
+				ret.originRoot,
+				ret.root,
+				destructs,
+				accounts,
+				ret.accountsOrigin,
+				ret.storages,
+				ret.storagesOrigin,
+				contracts,
+			)
+		}
 		// If trie database is enabled, commit the state update as a new layer
 		if db := s.db.TrieDB(); db != nil {
 			start := time.Now()
@@ -1433,4 +1460,8 @@ func (s *StateDB) Witness() *stateless.Witness {
 
 func (s *StateDB) AccessEvents() *AccessEvents {
 	return s.accessEvents
+}
+
+func (s *StateDB) SetOnCommitLogger(logger tracing.CommitHook) {
+	s.OnCommit = logger
 }
