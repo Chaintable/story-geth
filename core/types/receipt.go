@@ -258,6 +258,10 @@ func (r *Receipt) Size() common.StorageSize {
 	return size
 }
 
+func (r *Receipt) SetEffectiveGasPrice(tx *Transaction, baseFee *big.Int) {
+	r.EffectiveGasPrice = tx.inner.effectiveGasPrice(new(big.Int), baseFee)
+}
+
 // DeriveReceiptContext holds the contextual information needed to derive a receipt
 type DeriveReceiptContext struct {
 	BlockHash    common.Hash
