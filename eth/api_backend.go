@@ -196,7 +196,9 @@ func (b *EthAPIBackend) BlockByNumberOrHash(ctx context.Context, blockNrOrHash r
 	if hash, ok := blockNrOrHash.Hash(); ok {
 		header := b.eth.blockchain.GetHeaderByHash(hash)
 		if header == nil {
-			return nil, errors.New("header for hash not found")
+			// Return 'null' and no error if block is not found.
+			// This behavior is required by RPC spec.
+			return nil, nil
 		}
 		if blockNrOrHash.RequireCanonical && b.eth.blockchain.GetCanonicalHash(header.Number.Uint64()) != hash {
 			return nil, errors.New("hash is not currently canonical")
@@ -236,7 +238,10 @@ func (b *EthAPIBackend) StateAndHeaderByNumber(ctx context.Context, number rpc.B
 	}
 	stateDb, err := b.eth.BlockChain().StateAt(header.Root)
 	if err != nil {
-		return nil, nil, err
+		stateDb, err = b.eth.BlockChain().HistoricState(header.Root)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	return stateDb, header, nil
 }
@@ -258,7 +263,10 @@ func (b *EthAPIBackend) StateAndHeaderByNumberOrHash(ctx context.Context, blockN
 		}
 		stateDb, err := b.eth.BlockChain().StateAt(header.Root)
 		if err != nil {
-			return nil, nil, err
+			stateDb, err = b.eth.BlockChain().HistoricState(header.Root)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		return stateDb, header, nil
 	}
@@ -272,6 +280,10 @@ func (b *EthAPIBackend) HistoryPruningCutoff() uint64 {
 
 func (b *EthAPIBackend) GetReceipts(ctx context.Context, hash common.Hash) (types.Receipts, error) {
 	return b.eth.blockchain.GetReceiptsByHash(hash), nil
+}
+
+func (b *EthAPIBackend) GetCanonicalReceipt(tx *types.Transaction, blockHash common.Hash, blockNumber, blockIndex uint64) (*types.Receipt, error) {
+	return b.eth.blockchain.GetCanonicalReceipt(tx, blockHash, blockNumber, blockIndex)
 }
 
 func (b *EthAPIBackend) GetLogs(ctx context.Context, hash common.Hash, number uint64) ([][]*types.Log, error) {
@@ -349,25 +361,25 @@ func (b *EthAPIBackend) GetPoolTransaction(hash common.Hash) *types.Transaction 
 	return b.eth.txPool.Get(hash)
 }
 
-// GetTransaction retrieves the lookup along with the transaction itself associate
-// with the given transaction hash.
+// GetCanonicalTransaction retrieves the lookup along with the transaction itself
+// associate with the given transaction hash.
 //
-// An error will be returned if the transaction is not found, and background
-// indexing for transactions is still in progress. The error is used to indicate the
-// scenario explicitly that the transaction might be reachable shortly.
+// A null will be returned if the transaction is not found. The transaction is not
+// existent from the node's perspective. This can be due to the transaction indexer
+// not being finished. The caller must explicitly check the indexer progress.
 //
-// A null will be returned in the transaction is not found and background transaction
-// indexing is already finished. The transaction is not existent from the perspective
-// of node.
-func (b *EthAPIBackend) GetTransaction(ctx context.Context, txHash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64, error) {
-	lookup, tx, err := b.eth.blockchain.GetTransactionLookup(txHash)
-	if err != nil {
-		return false, nil, common.Hash{}, 0, 0, err
-	}
+// Notably, only the transaction in the canonical chain is visible.
+func (b *EthAPIBackend) GetCanonicalTransaction(txHash common.Hash) (bool, *types.Transaction, common.Hash, uint64, uint64) {
+	lookup, tx := b.eth.blockchain.GetCanonicalTransaction(txHash)
 	if lookup == nil || tx == nil {
-		return false, nil, common.Hash{}, 0, 0, nil
+		return false, nil, common.Hash{}, 0, 0
 	}
-	return true, tx, lookup.BlockHash, lookup.BlockIndex, lookup.Index, nil
+	return true, tx, lookup.BlockHash, lookup.BlockIndex, lookup.Index
+}
+
+// TxIndexDone returns true if the transaction indexer has finished indexing.
+func (b *EthAPIBackend) TxIndexDone() bool {
+	return b.eth.blockchain.TxIndexDone()
 }
 
 func (b *EthAPIBackend) GetPoolNonce(ctx context.Context, addr common.Address) (uint64, error) {
@@ -394,11 +406,15 @@ func (b *EthAPIBackend) SubscribeNewTxsEvent(ch chan<- core.NewTxsEvent) event.S
 	return b.eth.txPool.SubscribeTransactions(ch, true)
 }
 
-func (b *EthAPIBackend) SyncProgress() ethereum.SyncProgress {
+func (b *EthAPIBackend) SyncProgress(ctx context.Context) ethereum.SyncProgress {
 	prog := b.eth.Downloader().Progress()
 	if txProg, err := b.eth.blockchain.TxIndexProgress(); err == nil {
 		prog.TxIndexFinishedBlocks = txProg.Indexed
 		prog.TxIndexRemainingBlocks = txProg.Remaining
+	}
+	remain, err := b.eth.blockchain.StateIndexProgress()
+	if err == nil {
+		prog.StateIndexRemaining = remain
 	}
 	return prog
 }
@@ -472,4 +488,12 @@ func (b *EthAPIBackend) StateAtBlock(ctx context.Context, block *types.Block, re
 
 func (b *EthAPIBackend) StateAtTransaction(ctx context.Context, block *types.Block, txIndex int, reexec uint64) (*types.Transaction, vm.BlockContext, *state.StateDB, tracers.StateReleaseFunc, error) {
 	return b.eth.stateAtTransaction(ctx, block, txIndex, reexec)
+}
+
+func (b *EthAPIBackend) RPCTxSyncDefaultTimeout() time.Duration {
+	return b.eth.config.TxSyncDefaultTimeout
+}
+
+func (b *EthAPIBackend) RPCTxSyncMaxTimeout() time.Duration {
+	return b.eth.config.TxSyncMaxTimeout
 }
