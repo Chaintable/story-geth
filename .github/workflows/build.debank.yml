@@ -111,7 +111,7 @@ jobs:
             docker buildx imagetools create --tag ${REGISTRY}/${IMAGE}:${REVISION} ${REGISTRY}/${IMAGE}:amd64-${REVISION} ${REGISTRY}/${IMAGE}:arm64-${REVISION}
           fi
 
-      - name: Lark Notification
-        continue-on-error: true
-        run: |
-          notiv3 "Blockchain story image pushed 🎉" ${REGISTRY}/${IMAGE}:${REVISION}
+      # - name: Lark Notification
+      #   continue-on-error: true
+      #   run: |
+      #     notiv3 "Blockchain story image pushed 🎉" ${REGISTRY}/${IMAGE}:${REVISION}
