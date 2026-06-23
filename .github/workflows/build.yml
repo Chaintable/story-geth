@@ -49,6 +49,7 @@ jobs:
         with:
           app-id: ${{ secrets.RELEASE_MANAGER_APP_ID }}
           private-key: ${{ secrets.RELEASE_MANAGER_APP_SECRET }}
+          owner: ${{ github.repository_owner }}
 
       - name: Set revision
         run: echo "REVISION=$(git rev-parse --short=8 HEAD)" >> $GITHUB_ENV
