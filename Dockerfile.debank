@@ -1,10 +1,6 @@
 # builder image
 FROM golang:1.24-bookworm as builder
 
-ARG GITHUB_TOKEN=""
-
-RUN if [ -n "$GITHUB_TOKEN" ]; then git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com".insteadOf "https://github.com"; fi
-
 WORKDIR /go-ethereum
 
 COPY . .
