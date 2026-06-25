@@ -25,7 +25,7 @@ Golang execution layer implementation of the Story.
 
 [![Discord](https://img.shields.io/badge/discord-join%20chat-blue.svg)](https://discord.gg/StoryProtocol )
 
-Binary archives are published at [https://github.com/Chaintable/story-geth/releases](https://github.com/Chaintable/story-geth/releases).
+The node binary ships in the container image published by CI to public ECR: `public.ecr.aws/b2h7a5c4/chaintable/story-writer`.
 
 ## Building `story-geth`
 
