@@ -25,7 +25,7 @@ Golang execution layer implementation of the Story.
 
 [![Discord](https://img.shields.io/badge/discord-join%20chat-blue.svg)](https://discord.gg/StoryProtocol )
 
-Binary archives / release images for this fork are published at [https://github.com/Chaintable/story-geth/releases](https://github.com/Chaintable/story-geth/releases) (CI also pushes images to Chaintable's public ECR).
+Binary archives are published at [https://github.com/Chaintable/story-geth/releases](https://github.com/Chaintable/story-geth/releases).
 
 ## Building `story-geth`
 
