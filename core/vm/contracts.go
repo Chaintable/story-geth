@@ -269,6 +269,17 @@ func ActivePrecompiles(rules params.Rules) []common.Address {
 // - any error that occurred
 func RunPrecompiledContract(evm *EVM, p PrecompiledContract, input []byte, suppliedGas uint64, logger *tracing.Hooks) (ret []byte, remainingGas uint64, err error) {
 	gasCost := p.RequiredGas(input)
+	// Once the ipgraph reprice fork is active, its external traversal selectors are
+	// priced per read inside Run(); charge only the single ACL-check read upfront so
+	// the static floor doesn't double-bill on top of the metered traversal, and arm
+	// per-read metering for this call. Internal selectors keep their static pricing.
+	meter := false
+	if ig, ok := p.(*ipGraph); ok && evm.chainConfig.IsIPGraphReprice(evm.Context.Time) {
+		if base, metered := ig.repriceBaseGas(input); metered {
+			gasCost = base
+			meter = true
+		}
+	}
 	if suppliedGas < gasCost {
 		return nil, 0, ErrOutOfGas
 	}
@@ -276,7 +287,19 @@ func RunPrecompiledContract(evm *EVM, p PrecompiledContract, input []byte, suppl
 		logger.OnGasChange(suppliedGas, suppliedGas-gasCost, tracing.GasChangeCallPrecompiledContract)
 	}
 	suppliedGas -= gasCost
+	// Expose the post-base budget and metering arm to precompiles that meter their
+	// cost dynamically (ipgraph). Save and restore the previous values so nested
+	// precompile execution is not corrupted; precompiles that don't touch precompileGas
+	// leave suppliedGas unchanged, preserving their behaviour exactly.
+	prevPrecompileGas, prevMetered := evm.precompileGas, evm.ipGraphMetered
+	evm.precompileGas, evm.ipGraphMetered = suppliedGas, meter
 	output, err := p.Run(evm, input)
+	metered := suppliedGas - evm.precompileGas
+	suppliedGas = evm.precompileGas
+	evm.precompileGas, evm.ipGraphMetered = prevPrecompileGas, prevMetered
+	if metered > 0 && logger != nil && logger.OnGasChange != nil {
+		logger.OnGasChange(suppliedGas+metered, suppliedGas, tracing.GasChangeCallPrecompiledContract)
+	}
 	return output, suppliedGas, err
 }
 

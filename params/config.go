@@ -608,6 +608,13 @@ type ChainConfig struct {
 	AmsterdamTime *uint64 `json:"amsterdamTime,omitempty"` // Amsterdam switch time (nil = no fork, 0 = already on amsterdam)
 	VerkleTime    *uint64 `json:"verkleTime,omitempty"`    // Verkle switch time (nil = no fork, 0 = already on verkle)
 
+	// IPGraphRepriceTime activates per-read gas metering for the ipgraph precompile
+	// (Story-specific). Before this fork getRoyalty/getAncestorIps charge a flat
+	// constant regardless of graph size; after it each state read during traversal
+	// is metered, so the precompile's gas tracks its real cost. nil = not scheduled,
+	// 0 = active from genesis.
+	IPGraphRepriceTime *uint64 `json:"ipGraphRepriceTime,omitempty"`
+
 	// TerminalTotalDifficulty is the amount of total difficulty reached by
 	// the network that triggers the consensus upgrade.
 	TerminalTotalDifficulty *big.Int `json:"terminalTotalDifficulty,omitempty"`
@@ -1309,6 +1316,13 @@ func (c *ChainConfig) IsIliad() bool {
 
 func (c *ChainConfig) IsAeneid() bool {
 	return c.ChainID.Uint64() == IDStoryAeneid
+}
+
+// IsIPGraphReprice returns whether the ipgraph per-read gas reprice is active at
+// the given block time. Story-only; a nil IPGraphRepriceTime means it never
+// activates, so non-Story chains and unscheduled networks keep the old pricing.
+func (c *ChainConfig) IsIPGraphReprice(time uint64) bool {
+	return c.IsStory() && isTimestampForked(c.IPGraphRepriceTime, time)
 }
 
 // LatestFork returns the latest time-based fork that would be active for the given time.
