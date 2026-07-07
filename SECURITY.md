@@ -1,37 +1,84 @@
 # Security Policy
 
-The security of Story is critical. If you discover any security vulnerabilities, we appreciate your help in responsibly disclosing them to us.
+This repository is a **fork**: upstream [piplabs/story-geth](https://github.com/piplabs/story-geth)
+plus the [Chaintable pipeline](https://github.com/Chaintable/pipeline) tracer,
+which exports block data (headers, transactions, call traces, receipts, events,
+state diffs) to the Chaintable data pipeline.
 
-## Reporting a Vulnerability
+**First, determine where the issue lives.** The key question: does it reproduce
+on an unmodified upstream build?
 
-**Please do not file a public ticket** mentioning the vulnerability.
+- **Upstream issue** — reproduces on vanilla upstream (typically consensus, p2p
+  networking, EVM execution, transaction pool, standard RPC, storage). It affects
+  every user of the upstream client, not just this fork. **Follow the upstream
+  security process, not this document:**
+  https://github.com/piplabs/story-geth/security/policy
 
-We are in the process of setting up a bug bounty program. This document will be updated when ready, and the program will be announced on our channels.
+  We pick up upstream security fixes through periodic upstream merges; please do
+  not disclose upstream vulnerabilities here.
 
-We recommend to wait for the program to be ready for reporting, but if you find a vulnerability that will put the network at risk, please send an email to **security@piplabs.xyz**. We kindly request that you provide us with the following details:
+- **This fork's issue** — only reproduces with this fork's binaries or published
+  images, or involves the Chaintable pipeline layer: the pipeline tracer and its
+  block-data output, the Dockerfile / image build, or the CI workflows.
+  **Follow our process below.**
 
-- A clear description of the vulnerability and its potential impact.
-- Steps to reproduce the vulnerability.
-- Any additional information or proof of concept that can help us understand and address the issue.
+---
 
-If applicable, rewards will be provided through the bug bounty program when ready.
+## Our Process (issues in the Chaintable pipeline layer)
 
-## Audit Reports, Known Issues and Ongoing Auditing Contest
+### Supported Versions
 
-There is a series of known issues reported by our our multiple auditors. Please [review our audit reports](./docs/audits/) to make sure you are not reporting a duplicate.
+We provide security updates for the latest `main` branch and recent releases.
 
-Folders:
+| Version | Supported |
+|---------|----------|
+| main    | ✅       |
+| Latest release | ✅ |
+| older versions   | ❌ |
 
-- geth: audits of the original geth codebase
-- story: Story network audits (scope includes Story Geth, Story Consensus Client and Cosmos fork, please refer to the relevant issues for this repository)
+### Reporting a Vulnerability
 
-Story has undergone a public [audit competition by Cantina](https://cantina.xyz/competitions/0561defa-eeb2-4a74-8884-5d7a873afa58). We will publish the report as soon as the judging period is over.
-Please be advised that there is a high chance that your reported vulnerability can be a duplicate if you do it before we publish the report.
+If you discover a security issue in the Chaintable pipeline layer, **do not open
+a public issue**.
 
-## Responsible Disclosure
+Please report it privately:
 
-We believe in responsible disclosure and request that you refrain from publicly disclosing any vulnerabilities until we have had sufficient time to investigate and address them. We appreciate your cooperation in helping us maintain the security and integrity of our blockchain network.
+- GitHub Security Advisory on this repository (preferred)
+- Email: bugbounty@debank.com
 
-## Disclaimer
+Include:
 
-Please note that this document is subject to change and may be updated as our security practices evolve. We encourage you to check back regularly for any updates or changes.
+- Description of the issue
+- Impact / severity assessment
+- Steps to reproduce
+- Proof of concept (if available)
+
+### Response Process
+
+We aim to:
+
+- Acknowledge within **72 hours**
+- Provide initial assessment within **3–5 days**
+- Fix and release as soon as possible depending on severity
+
+### Disclosure Policy
+
+- We follow **responsible disclosure**
+- Fixes may be developed privately before public release
+- Credit will be given unless you request anonymity
+
+### Scope
+
+Typical security-relevant areas of the Chaintable pipeline layer include:
+
+- Integrity of the emitted block data (ordering, duplication, corruption)
+- The pipeline tracer and any RPC endpoints it adds
+- Resource exhaustion introduced by the pipeline tracer (memory / goroutine leaks)
+- The published Docker images and the build / CI pipeline
+
+### Notes
+
+This fork is a data producer for the
+[Chaintable pipeline](https://github.com/Chaintable/pipeline): its output feeds
+downstream indexing and query systems. Security issues here may propagate
+downstream — please report anything suspicious.
