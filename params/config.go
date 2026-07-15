@@ -252,6 +252,7 @@ var (
 		CancunTime:              newUint64(0),
 		PragueTime:              newUint64(1748305808),
 		OsakaTime:               newUint64(1767830400),
+		IPGraphRepriceTime:      newUint64(1784509200),
 		Enable4844:              false,
 		BlobScheduleConfig: &BlobScheduleConfig{
 			Cancun: DefaultCancunBlobConfig,
@@ -837,6 +838,11 @@ func (c *ChainConfig) Description() string {
 	if c.BPO5Time != nil {
 		banner += fmt.Sprintf(" - BPO5:                        @%-10v blob: (%s)\n", *c.BPO5Time, c.BlobScheduleConfig.BPO5)
 	}
+	if c.IPGraphRepriceTime != nil {
+		banner += "\nStory hard forks (timestamp based):\n"
+		banner += fmt.Sprintf(" - IPGraph Reprice:             @%-10v\n", *c.IPGraphRepriceTime)
+	}
+
 	if c.AmsterdamTime != nil {
 		banner += fmt.Sprintf(" - Amsterdam:									 @%-10v blob: (%s)\n", *c.AmsterdamTime, c.BlobScheduleConfig.Amsterdam)
 	}
@@ -1253,6 +1259,9 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, headNumber *big.Int, 
 	}
 	if isForkTimestampIncompatible(c.OsakaTime, newcfg.OsakaTime, headTimestamp) {
 		return newTimestampCompatError("Osaka fork timestamp", c.OsakaTime, newcfg.OsakaTime)
+	}
+	if isForkTimestampIncompatible(c.IPGraphRepriceTime, newcfg.IPGraphRepriceTime, headTimestamp) {
+		return newTimestampCompatError("IPGraph reprice fork timestamp", c.IPGraphRepriceTime, newcfg.IPGraphRepriceTime)
 	}
 	if isForkTimestampIncompatible(c.VerkleTime, newcfg.VerkleTime, headTimestamp) {
 		return newTimestampCompatError("Verkle fork timestamp", c.VerkleTime, newcfg.VerkleTime)
