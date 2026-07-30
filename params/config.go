@@ -280,6 +280,7 @@ var (
 		CancunTime:              newUint64(0),
 		PragueTime:              newUint64(1751934608),
 		OsakaTime:               newUint64(1768435200),
+		IPGraphRepriceTime:      newUint64(1786325400),
 		Enable4844:              false,
 		BlobScheduleConfig: &BlobScheduleConfig{
 			Cancun: DefaultCancunBlobConfig,
