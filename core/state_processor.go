@@ -162,6 +162,9 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 					log.Error("Transaction execution panicked", "tx", tx.Hash(), "panic", p, "stack", string(debug.Stack()))
 					panic(p)
 				}
+				if err != nil {
+					log.Error("Transaction execution failed before receipt", "block", blockNumber, "txIndex", statedb.TxIndex(), "tx", tx.Hash(), "err", err)
+				}
 				receipt.SetEffectiveGasPrice(tx, evm.Context.BaseFee)
 				hooks.OnTxEnd(receipt, err)
 			}()
