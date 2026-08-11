@@ -19,6 +19,7 @@ package core
 import (
 	"fmt"
 	"math/big"
+	"runtime/debug"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/misc"
@@ -27,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -156,6 +158,10 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 		}
 		if hooks.OnTxEnd != nil {
 			defer func() {
+				if p := recover(); p != nil {
+					log.Error("Transaction execution panicked", "tx", tx.Hash(), "panic", p, "stack", string(debug.Stack()))
+					panic(p)
+				}
 				receipt.SetEffectiveGasPrice(tx, evm.Context.BaseFee)
 				hooks.OnTxEnd(receipt, err)
 			}()
