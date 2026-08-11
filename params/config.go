@@ -252,6 +252,7 @@ var (
 		CancunTime:              newUint64(0),
 		PragueTime:              newUint64(1748305808),
 		OsakaTime:               newUint64(1767830400),
+		IPGraphRepriceTime:      newUint64(1784509200),
 		Enable4844:              false,
 		BlobScheduleConfig: &BlobScheduleConfig{
 			Cancun: DefaultCancunBlobConfig,
@@ -279,6 +280,7 @@ var (
 		CancunTime:              newUint64(0),
 		PragueTime:              newUint64(1751934608),
 		OsakaTime:               newUint64(1768435200),
+		IPGraphRepriceTime:      newUint64(1786325400),
 		Enable4844:              false,
 		BlobScheduleConfig: &BlobScheduleConfig{
 			Cancun: DefaultCancunBlobConfig,
@@ -608,6 +610,13 @@ type ChainConfig struct {
 	AmsterdamTime *uint64 `json:"amsterdamTime,omitempty"` // Amsterdam switch time (nil = no fork, 0 = already on amsterdam)
 	VerkleTime    *uint64 `json:"verkleTime,omitempty"`    // Verkle switch time (nil = no fork, 0 = already on verkle)
 
+	// IPGraphRepriceTime activates per-read gas metering for the ipgraph precompile
+	// (Story-specific). Before this fork getRoyalty/getAncestorIps charge a flat
+	// constant regardless of graph size; after it each state read during traversal
+	// is metered, so the precompile's gas tracks its real cost. nil = not scheduled,
+	// 0 = active from genesis.
+	IPGraphRepriceTime *uint64 `json:"ipGraphRepriceTime,omitempty"`
+
 	// TerminalTotalDifficulty is the amount of total difficulty reached by
 	// the network that triggers the consensus upgrade.
 	TerminalTotalDifficulty *big.Int `json:"terminalTotalDifficulty,omitempty"`
@@ -830,6 +839,11 @@ func (c *ChainConfig) Description() string {
 	if c.BPO5Time != nil {
 		banner += fmt.Sprintf(" - BPO5:                        @%-10v blob: (%s)\n", *c.BPO5Time, c.BlobScheduleConfig.BPO5)
 	}
+	if c.IPGraphRepriceTime != nil {
+		banner += "\nStory hard forks (timestamp based):\n"
+		banner += fmt.Sprintf(" - IPGraph Reprice:             @%-10v\n", *c.IPGraphRepriceTime)
+	}
+
 	if c.AmsterdamTime != nil {
 		banner += fmt.Sprintf(" - Amsterdam:									 @%-10v blob: (%s)\n", *c.AmsterdamTime, c.BlobScheduleConfig.Amsterdam)
 	}
@@ -1247,6 +1261,9 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, headNumber *big.Int, 
 	if isForkTimestampIncompatible(c.OsakaTime, newcfg.OsakaTime, headTimestamp) {
 		return newTimestampCompatError("Osaka fork timestamp", c.OsakaTime, newcfg.OsakaTime)
 	}
+	if isForkTimestampIncompatible(c.IPGraphRepriceTime, newcfg.IPGraphRepriceTime, headTimestamp) {
+		return newTimestampCompatError("IPGraph reprice fork timestamp", c.IPGraphRepriceTime, newcfg.IPGraphRepriceTime)
+	}
 	if isForkTimestampIncompatible(c.VerkleTime, newcfg.VerkleTime, headTimestamp) {
 		return newTimestampCompatError("Verkle fork timestamp", c.VerkleTime, newcfg.VerkleTime)
 	}
@@ -1309,6 +1326,13 @@ func (c *ChainConfig) IsIliad() bool {
 
 func (c *ChainConfig) IsAeneid() bool {
 	return c.ChainID.Uint64() == IDStoryAeneid
+}
+
+// IsIPGraphReprice returns whether the ipgraph per-read gas reprice is active at
+// the given block time. Story-only; a nil IPGraphRepriceTime means it never
+// activates, so non-Story chains and unscheduled networks keep the old pricing.
+func (c *ChainConfig) IsIPGraphReprice(time uint64) bool {
+	return c.IsStory() && isTimestampForked(c.IPGraphRepriceTime, time)
 }
 
 // LatestFork returns the latest time-based fork that would be active for the given time.

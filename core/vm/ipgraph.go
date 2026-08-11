@@ -8,7 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 const (
@@ -130,6 +130,27 @@ func (c *ipGraph) RequiredGas(input []byte) uint64 {
 		}
 	default:
 		return intrinsicGas
+	}
+}
+
+// repriceBaseGas returns the upfront floor for the external (Ext) traversal selectors
+// whose real cost is metered per read inside Run() once the reprice fork is active: a
+// single ACL-check read. Only the externally-callable Ext variants are metered; the
+// internal selectors keep their static RequiredGas price, as do write and bounded O(1)
+// selectors. The bool reports whether per-read metering applies.
+func (c *ipGraph) repriceBaseGas(input []byte) (uint64, bool) {
+	if len(input) < 4 {
+		return 0, false
+	}
+	switch selector := input[:4]; {
+	case bytes.Equal(selector, getRoyaltyExtSelector),
+		bytes.Equal(selector, getRoyaltyStackExtSelector),
+		bytes.Equal(selector, getAncestorIpsExtSelector),
+		bytes.Equal(selector, getAncestorIpsCountExtSelector),
+		bytes.Equal(selector, hasAncestorIpsExtSelector):
+		return ipGraphColdReadGas, true
+	default:
+		return 0, false
 	}
 }
 
@@ -349,7 +370,10 @@ func (c *ipGraph) getAncestorIps(input []byte, evm *EVM, ipGraphAddress common.A
 		return nil, fmt.Errorf("input too short for getAncestorIps")
 	}
 	ipId := common.BytesToAddress(input[0:32])
-	ancestorsMap := c.findAncestors(ipId, evm, ipGraphAddress)
+	ancestorsMap, err := c.findAncestors(ipId, evm, ipGraphAddress)
+	if err != nil {
+		return nil, err
+	}
 
 	// Convert map keys to a sorted slice for stable ordering results
 	ancestors := make([]common.Address, 0, len(ancestorsMap))
@@ -389,7 +413,10 @@ func (c *ipGraph) getAncestorIpsCount(input []byte, evm *EVM, ipGraphAddress com
 		return nil, fmt.Errorf("input too short for getAncestorIpsCount")
 	}
 	ipId := common.BytesToAddress(input[0:32])
-	ancestors := c.findAncestors(ipId, evm, ipGraphAddress)
+	ancestors, err := c.findAncestors(ipId, evm, ipGraphAddress)
+	if err != nil {
+		return nil, err
+	}
 
 	count := new(big.Int).SetUint64(uint64(len(ancestors)))
 	return common.BigToHash(count).Bytes(), nil
@@ -414,7 +441,10 @@ func (c *ipGraph) hasAncestorIp(input []byte, evm *EVM, ipGraphAddress common.Ad
 	}
 	ipId := common.BytesToAddress(input[0:32])
 	parentIpId := common.BytesToAddress(input[32:64])
-	ancestors := c.findAncestors(ipId, evm, ipGraphAddress)
+	ancestors, err := c.findAncestors(ipId, evm, ipGraphAddress)
+	if err != nil {
+		return nil, err
+	}
 
 	if _, found := ancestors[parentIpId]; found {
 		return common.LeftPadBytes([]byte{1}, 32), nil
@@ -422,7 +452,30 @@ func (c *ipGraph) hasAncestorIp(input []byte, evm *EVM, ipGraphAddress common.Ad
 	return common.LeftPadBytes([]byte{0}, 32), nil
 }
 
-func (c *ipGraph) findAncestors(ipId common.Address, evm *EVM, ipGraphAddress common.Address) map[common.Address]struct{} {
+// ipGraphColdReadGas is charged per graph slot read during an ipgraph traversal
+// once the reprice fork is active, mirroring the EIP-2929 cold SLOAD price so the
+// precompile's gas finally tracks its real O(reads) cost instead of a flat constant.
+const ipGraphColdReadGas = params.ColdSloadCostEIP2929
+
+// chargeIPGraphRead meters a single ipgraph state read against the per-call
+// precompile gas budget. It is a no-op before the reprice fork (preserving the old
+// flat pricing for historical replay). When the budget is exhausted it zeroes the
+// budget and returns ErrOutOfGas so the traversal stops and the whole call reverts
+// — it must never let a traversal return a partial result, which would break both
+// consensus and gas estimation.
+func (evm *EVM) chargeIPGraphRead() error {
+	if !evm.ipGraphMetered {
+		return nil
+	}
+	if evm.precompileGas < ipGraphColdReadGas {
+		evm.precompileGas = 0
+		return ErrOutOfGas
+	}
+	evm.precompileGas -= ipGraphColdReadGas
+	return nil
+}
+
+func (c *ipGraph) findAncestors(ipId common.Address, evm *EVM, ipGraphAddress common.Address) (map[common.Address]struct{}, error) {
 	ancestors := make(map[common.Address]struct{})
 	var stack []common.Address
 	stack = append(stack, ipId)
@@ -430,12 +483,18 @@ func (c *ipGraph) findAncestors(ipId common.Address, evm *EVM, ipGraphAddress co
 		node := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 
+		if err := evm.chargeIPGraphRead(); err != nil {
+			return nil, err
+		}
 		currentLengthHash := evm.StateDB.GetState(ipGraphAddress, common.BytesToHash(node.Bytes()))
 		currentLength := currentLengthHash.Big()
 
 		for i := uint64(0); i < currentLength.Uint64(); i++ {
 			slot := crypto.Keccak256Hash(node.Bytes()).Big()
 			slot.Add(slot, new(big.Int).SetUint64(i))
+			if err := evm.chargeIPGraphRead(); err != nil {
+				return nil, err
+			}
 			storedParent := evm.StateDB.GetState(ipGraphAddress, common.BigToHash(slot))
 			parentIpId := common.BytesToAddress(storedParent.Bytes())
 
@@ -445,7 +504,7 @@ func (c *ipGraph) findAncestors(ipId common.Address, evm *EVM, ipGraphAddress co
 			}
 		}
 	}
-	return ancestors
+	return ancestors, nil
 }
 
 func (c *ipGraph) setRoyalty(input []byte, evm *EVM, ipGraphAddress common.Address) ([]byte, error) {
@@ -513,11 +572,14 @@ func (c *ipGraph) getRoyalty(input []byte, evm *EVM, ipGraphAddress common.Addre
 	royaltyPolicyKind := new(big.Int).SetBytes(getData(input, 64, 32))
 	totalRoyalty := big.NewInt(0)
 	if royaltyPolicyKind.Cmp(royaltyPolicyKindLAP) == 0 {
-		totalRoyalty = c.getRoyaltyLap(ipId, ancestorIpId, evm, ipGraphAddress)
+		totalRoyalty, err = c.getRoyaltyLap(ipId, ancestorIpId, evm, ipGraphAddress)
 	} else if royaltyPolicyKind.Cmp(royaltyPolicyKindLRP) == 0 {
-		totalRoyalty = c.getRoyaltyLrp(ipId, ancestorIpId, evm, ipGraphAddress)
+		totalRoyalty, err = c.getRoyaltyLrp(ipId, ancestorIpId, evm, ipGraphAddress)
 	} else {
 		return nil, fmt.Errorf("unknown royalty policy kind")
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	// Check if royalty value fits in uint32
@@ -527,7 +589,7 @@ func (c *ipGraph) getRoyalty(input []byte, evm *EVM, ipGraphAddress common.Addre
 	return common.BigToHash(totalRoyalty).Bytes(), nil
 }
 
-func (c *ipGraph) getRoyaltyLap(ipId, ancestorIpId common.Address, evm *EVM, ipGraphAddress common.Address) *big.Int {
+func (c *ipGraph) getRoyaltyLap(ipId, ancestorIpId common.Address, evm *EVM, ipGraphAddress common.Address) (*big.Int, error) {
 	royalty := make(map[common.Address]*big.Int)
 	pathCount := make(map[common.Address]*big.Int)
 	royalty[ipId] = hundredPercent
@@ -535,8 +597,9 @@ func (c *ipGraph) getRoyaltyLap(ipId, ancestorIpId common.Address, evm *EVM, ipG
 
 	topoOrder, allParents, err := c.topologicalSort(ipId, ancestorIpId, evm, ipGraphAddress)
 	if err != nil {
-		log.Error("Failed to perform topological sort", "error", err)
-		return big.NewInt(0) // Return 0 if any error occurs
+		// Propagate the error (e.g. ErrOutOfGas from the metered traversal) so the
+		// call reverts; never swallow it into a royalty of 0.
+		return nil, err
 	}
 
 	for i := len(topoOrder) - 1; i >= 0; i-- {
@@ -550,6 +613,9 @@ func (c *ipGraph) getRoyaltyLap(ipId, ancestorIpId common.Address, evm *EVM, ipG
 		for _, parentIpId := range parents {
 			royaltySlot := crypto.Keccak256Hash(node.Bytes(), parentIpId.Bytes(), royaltyPolicyKindLAP.Bytes()).Big()
 			royaltyHash := common.BigToHash(royaltySlot)
+			if err := evm.chargeIPGraphRead(); err != nil {
+				return nil, err
+			}
 			parentRoyalty := evm.StateDB.GetState(ipGraphAddress, royaltyHash).Big()
 
 			contribution := pathCount[node]
@@ -569,19 +635,20 @@ func (c *ipGraph) getRoyaltyLap(ipId, ancestorIpId common.Address, evm *EVM, ipG
 	}
 
 	if result, exists := royalty[ancestorIpId]; exists {
-		return result
+		return result, nil
 	}
-	return big.NewInt(0)
+	return big.NewInt(0), nil
 }
 
-func (c *ipGraph) getRoyaltyLrp(ipId, ancestorIpId common.Address, evm *EVM, ipGraphAddress common.Address) *big.Int {
+func (c *ipGraph) getRoyaltyLrp(ipId, ancestorIpId common.Address, evm *EVM, ipGraphAddress common.Address) (*big.Int, error) {
 	royalty := make(map[common.Address]*big.Int)
 	royalty[ipId] = hundredPercent
 
 	topoOrder, allParents, err := c.topologicalSort(ipId, ancestorIpId, evm, ipGraphAddress)
 	if err != nil {
-		log.Error("Failed to perform topological sort", "error", err)
-		return big.NewInt(0) // Return 0 if any error occurs
+		// Propagate the error (e.g. ErrOutOfGas from the metered traversal) so the
+		// call reverts; never swallow it into a royalty of 0.
+		return nil, err
 	}
 
 	for i := len(topoOrder) - 1; i >= 0; i-- {
@@ -600,6 +667,9 @@ func (c *ipGraph) getRoyaltyLrp(ipId, ancestorIpId common.Address, evm *EVM, ipG
 		for _, parentIpId := range parents {
 			royaltySlot := crypto.Keccak256Hash(node.Bytes(), parentIpId.Bytes(), royaltyPolicyKindLRP.Bytes()).Big()
 			royaltyHash := common.BigToHash(royaltySlot)
+			if err := evm.chargeIPGraphRead(); err != nil {
+				return nil, err
+			}
 			parentRoyalty := evm.StateDB.GetState(ipGraphAddress, royaltyHash).Big()
 
 			contribution := new(big.Int).Div(new(big.Int).Mul(currentRoyalty, parentRoyalty), hundredPercent)
@@ -613,9 +683,9 @@ func (c *ipGraph) getRoyaltyLrp(ipId, ancestorIpId common.Address, evm *EVM, ipG
 	}
 
 	if result, exists := royalty[ancestorIpId]; exists {
-		return result
+		return result, nil
 	}
-	return big.NewInt(0)
+	return big.NewInt(0), nil
 }
 
 func (c *ipGraph) topologicalSort(ipId, ancestorIpId common.Address, evm *EVM, ipGraphAddress common.Address) (
@@ -640,11 +710,17 @@ func (c *ipGraph) topologicalSort(ipId, ancestorIpId common.Address, evm *EVM, i
 		visited[current] = true
 		stack = append(stack, current)
 
+		if err := evm.chargeIPGraphRead(); err != nil {
+			return nil, nil, err
+		}
 		currentLengthHash := evm.StateDB.GetState(ipGraphAddress, common.BytesToHash(current.Bytes()))
 		currentLength := currentLengthHash.Big()
 		for i := uint64(0); i < currentLength.Uint64(); i++ {
 			slot := crypto.Keccak256Hash(current.Bytes()).Big()
 			slot.Add(slot, new(big.Int).SetUint64(i))
+			if err := evm.chargeIPGraphRead(); err != nil {
+				return nil, nil, err
+			}
 			parentIpIdBytes := evm.StateDB.GetState(ipGraphAddress, common.BigToHash(slot)).Bytes()
 			parentIpId := common.BytesToAddress(parentIpIdBytes)
 			allParents[current] = append(allParents[current], parentIpId)
@@ -681,34 +757,49 @@ func (c *ipGraph) getRoyaltyStack(input []byte, evm *EVM, ipGraphAddress common.
 	ipId := common.BytesToAddress(input[0:32])
 	royaltyPolicyKind := new(big.Int).SetBytes(getData(input, 32, 32))
 	if royaltyPolicyKind.Cmp(royaltyPolicyKindLAP) == 0 {
-		totalRoyalty = c.getRoyaltyStackLap(ipId, evm, ipGraphAddress)
+		totalRoyalty, err = c.getRoyaltyStackLap(ipId, evm, ipGraphAddress)
 	} else if royaltyPolicyKind.Cmp(royaltyPolicyKindLRP) == 0 {
-		totalRoyalty = c.getRoyaltyStackLrp(ipId, evm, ipGraphAddress)
+		totalRoyalty, err = c.getRoyaltyStackLrp(ipId, evm, ipGraphAddress)
 	} else {
 		return nil, fmt.Errorf("unknown royalty policy kind")
+	}
+	if err != nil {
+		return nil, err
 	}
 	return common.BigToHash(totalRoyalty).Bytes(), nil
 }
 
-func (c *ipGraph) getRoyaltyStackLap(ipId common.Address, evm *EVM, ipGraphAddress common.Address) *big.Int {
+func (c *ipGraph) getRoyaltyStackLap(ipId common.Address, evm *EVM, ipGraphAddress common.Address) (*big.Int, error) {
 	slot := crypto.Keccak256Hash(ipId.Bytes(), royaltyPolicyKindLAP.Bytes(), []byte("royaltyStack")).Big()
+	if err := evm.chargeIPGraphRead(); err != nil {
+		return nil, err
+	}
 	royaltyStack := evm.StateDB.GetState(ipGraphAddress, common.BigToHash(slot)).Big()
-	return royaltyStack
+	return royaltyStack, nil
 }
 
-func (c *ipGraph) getRoyaltyStackLrp(ipId common.Address, evm *EVM, ipGraphAddress common.Address) *big.Int {
+func (c *ipGraph) getRoyaltyStackLrp(ipId common.Address, evm *EVM, ipGraphAddress common.Address) (*big.Int, error) {
 	totalRoyalty := big.NewInt(0)
+	if err := evm.chargeIPGraphRead(); err != nil {
+		return nil, err
+	}
 	currentLengthHash := evm.StateDB.GetState(ipGraphAddress, common.BytesToHash(ipId.Bytes()))
 	currentLength := currentLengthHash.Big()
 
 	for i := uint64(0); i < currentLength.Uint64(); i++ {
 		slot := crypto.Keccak256Hash(ipId.Bytes()).Big()
 		slot.Add(slot, new(big.Int).SetUint64(i))
+		if err := evm.chargeIPGraphRead(); err != nil {
+			return nil, err
+		}
 		storedParent := evm.StateDB.GetState(ipGraphAddress, common.BigToHash(slot))
 		parentIpId := common.BytesToAddress(storedParent.Bytes())
 		royaltySlot := crypto.Keccak256Hash(ipId.Bytes(), parentIpId.Bytes(), royaltyPolicyKindLRP.Bytes()).Big()
+		if err := evm.chargeIPGraphRead(); err != nil {
+			return nil, err
+		}
 		royalty := evm.StateDB.GetState(ipGraphAddress, common.BigToHash(royaltySlot)).Big()
 		totalRoyalty.Add(totalRoyalty, royalty)
 	}
-	return totalRoyalty
+	return totalRoyalty, nil
 }

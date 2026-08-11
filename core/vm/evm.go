@@ -119,6 +119,18 @@ type EVM struct {
 	// applied in opCall*.
 	callGasTemp uint64
 
+	// precompileGas is the remaining gas budget exposed to precompiles that meter
+	// their cost dynamically during execution (the ipgraph precompile). It is set by
+	// RunPrecompiledContract around each precompile call and read back afterwards;
+	// precompiles that price purely via RequiredGas never touch it.
+	precompileGas uint64
+
+	// ipGraphMetered arms per-read gas metering for the current precompile call. It is
+	// set by RunPrecompiledContract only for the ipgraph traversal selectors that are
+	// metered after the reprice fork (the external getRoyaltyExt/getAncestorIpsExt/…
+	// variants); internal selectors keep their static RequiredGas pricing.
+	ipGraphMetered bool
+
 	// precompiles holds the precompiled contracts for the current epoch
 	precompiles map[common.Address]PrecompiledContract
 
