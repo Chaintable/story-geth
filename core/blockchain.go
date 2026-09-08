@@ -1815,7 +1815,7 @@ func (bc *BlockChain) pushBlockChange(block *types.Block) {
 		}
 
 		if blockChange != nil {
-			err := tracer.NodeXPusher.PushBlockChangeNotification(blockChange)
+			err := tracer.NodeXPusher.PushBlockChangeNotification(blockChange, nil)
 			if err != nil {
 				log.Error("SetCanonical PushBlockChangeNotification error", "err", err)
 			}
